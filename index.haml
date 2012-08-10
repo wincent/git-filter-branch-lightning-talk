@@ -3,7 +3,7 @@
   %head
     %meta{:charset => "utf-8"}/
     %title Presentation title
-    %meta{:content => "Causes Engineering", :name => "author"}/
+    %meta{:content => "Greg Hurrell", :name => "author"}/
     %link{:href => "http://fonts.googleapis.com/css?family=Lato:400,700,400italic,700italic", :rel => "stylesheet", :type => "text/css"}/
     %link{:href => "reveal/css/reset.css", :rel => "stylesheet"}/
     %link{:href => "reveal/css/main.css", :rel => "stylesheet"}/
@@ -11,35 +11,209 @@
     %link{:href => "causes.css", :rel => "stylesheet"}/
     / overrides for default reveal styles
     :css
-      #reveal pre {
+      .reveal pre {
         font-size: 24px;
+      }
+      .reveal section img {
+        width: 100%;
       }
   %body#causes
     .reveal
       .slides
 
         %section
-          %h1 Presentation title
+          %h3 How to open-source your repo
+          %h4 (without open-sourcing your repo)
           %br
           %h5 presented by
-          %h4 Presenter
+          %h4 Greg Hurrell
           %img.logo{:src => 'assets/causes_logo.png'}
 
 
         %section
-          %h2 Slide title
+          %h3 Why?
           %ul
-            %li.fragment
-              A bullet point
-            %li.fragment
-              Another bullet point
-              %pre.fragment
-                %code.language-ruby{:contenteditable => ""}
-                  :preserve
-                    # this is Ruby code
-                    &lt;%= @cause.name %&gt;
-            %li.fragment
-              Another bullet point
+            %li Puts code and practices out in front of potential hires
+            %li Raises the tech profile of the organization
+            %li Writing for a public audience holds us to higher standards
+            %li Opens the door to contributions and bugfixes by third parties
+            %li
+              Delivers many benefits of open source immediately, without
+              having to go through an arduous open-sourcing process
+
+        %section
+          %h3 The plan
+          %ul
+            %li
+              Automatically maintain an open-source fork
+            %li
+              A subset of a larger application
+              %ul
+                %li
+                  %code app/assets/
+                %li
+                  %code public/
+                %li
+                  %code spec/javascripts/
+
+        %section
+          %h3 Overview
+          %a{:href => 'assets/overview.png'}
+            %img{:src => 'assets/overview-transparent.png'}
+
+        %section
+          %h3 Gotchas
+          %ul
+            %li Filtered commits may not have stable patch IDs
+            %li
+              You can't infer the merge base for rebasing just by looking at
+              the shape of the DAG
+            %li
+              Boundary conditions can occur when the commit range you're
+              operating on is adjacent to a pruned commit
+
+        %section
+          %h3
+            The
+            %code post-receive
+            hook
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                #!/bin/sh
+                
+                while read OLD NEW REF; do
+                  if [ "$REF" = 'refs/heads/master' ]; then
+                    hooks/post-receive-helper.sh $OLD $NEW
+                  fi
+                done
+
+        %section
+          %h3 Listing all the files in a commit
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                git ls-tree -r                      \
+                            --name-only             \
+                            --full-tree $GIT_COMMIT
+
+        %section
+          %h3 Inverting our whitelist to produce a blacklist
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                egrep -v "^(public/|app/assets/|spec/javascripts/)"
+
+        %section
+          %h3 Removing blacklisted files
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                git rm -r                         \
+                       --quiet                    \
+                       --cached                   \
+                       --ignore-unmatch -- $FILES
+
+        %section
+          %h3 Filtering a range of commits
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                git filter-branch -f --prune-empty --index-filter \
+                    '
+                      git rm -r
+                             --quiet
+                             --cached
+                             --ignore-unmatch --
+                        $(git ls-tree -r
+                                      --name-only
+                                      --full-tree $GIT_COMMIT |
+                          egrep -v
+                            "^(public/|app/assets/|spec/javascripts/)")
+                    ' $BASE~1..filtered-master
+
+        %section
+          %h3
+            Choosing
+            %code $BASE
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                # overshoot (instead of $OLD~1) because we want to
+                # make sure we produce at least one patch-id that
+                # we'll be able to match against what is already
+                # in "open"
+                BASE=$(git rev-list --max-count=2 $OLD~1 --
+                       app/assets/
+                       public/
+                       spec/javascripts/ | tail -1)
+
+        %section
+          %h3 Short-circuiting
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                CANDIDATES=$(git rev-list $OLD..$NEW --
+                             app/assets/
+                             public/
+                             spec/javascripts/)
+                if [ -z "$CANDIDATES" ]; then
+                  # Nothing newsworthy here; bail.
+                  exit
+                fi
+
+        %section
+          %h3 Choosing a merge base
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                # determine the first commit in the range
+                # OLD..NEW which survived filtering and is
+                # not already on "open"
+                OPEN=$(git format-patch -k --stdout open~1..open |
+                       git patch-id |
+                       head -1 |
+                       cut -f 1 -d ' ')
+                
+                BASE=$(git format-patch -k --stdout
+                       $BASE~1..filtered-master |
+                       git patch-id |
+                       grep $OPEN |
+                       cut -f 2 -d ' ')
+
+        %section
+          %h3 Transplanting the filtered history
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                # rebase interesting part of filtered-master
+                # branch (subset of OLD..NEW range) onto "open"
+                git rebase --onto open $BASE filtered-master
+                git branch -f open filtered-master
+
+        %section
+          %h3 Publishing
+          %pre
+            %code.language-bash{:contenteditable => ""}
+              :preserve
+                # push "open" to GitHub
+                # (fast-forward only, in case we screw up)
+                git push github open:open
+
+        %section
+          %h3 Next steps
+          %ul
+            %li Monitor and verify operation of system
+            %li Build team awareness of implications
+            %li Plan for expanding whitelist
+
+        %section
+          %h3 The end
+          %ul
+            %li
+              Presentation source:
+              %br
+              https://github.com/ghurrell
 
       /
         required for correct operation of reveal.js,
