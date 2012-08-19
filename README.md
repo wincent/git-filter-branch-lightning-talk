@@ -3,7 +3,7 @@ automatically maintain an open source subset of your otherwise closed-source
 repo.
 
 - interactive copy of slides:
-  http://ghurrell.github.com/rails-3-lightning-talk.git
+  http://ghurrell.github.com/git-filter-branch-lightning-talk.git
 - me:
   greg@causes.com
 - us:
